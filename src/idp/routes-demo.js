@@ -79,7 +79,7 @@ module.exports = function registerDemoRoutes(app) {
         <div class="table-wrap"><table><tr><th>Layanan</th><th>Status</th><th>Sesi</th><th>Gagal N kali berikutnya</th><th></th></tr>${services}</table></div></div>
       <div class="card"><h2>Logout gagal — perlu ditindaklanjuti</h2>
         ${failed ? `<div class="table-wrap"><table><tr><th>Waktu</th><th>Layanan</th><th>Akun</th><th>Galat</th><th></th></tr>${failed}</table></div>` : '<p class="small muted">Belum ada.</p>'}</div>
-      <div class="card" id="kotak-keluar"><h2>Kotak keluar (SMS & email simulasi)</h2>
+      <div class="card" id="kotak-keluar"><h2>Kotak keluar (email simulasi)</h2>
         ${outbox ? `<div class="table-wrap"><table>${outbox}</table></div>` : '<p class="small muted">Kosong.</p>'}</div>
       <div class="card"><h2>Riwayat keamanan (semua akun)</h2>
         <div class="table-wrap"><table><tr><th>Waktu</th><th>Akun</th><th>Kejadian</th><th>Rincian</th></tr>${audit}</table></div></div>`,

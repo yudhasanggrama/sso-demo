@@ -50,20 +50,7 @@ function makeBackupCodes(n = 8) {
 }
 const normalizeBackupCode = code => String(code).toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^(.{4})(.{4})$/, '$1-$2');
 
-const randomDigits = (n = 6) => String(crypto.randomInt(0, 10 ** n)).padStart(n, '0');
-
-function verifyEcSignature(publicJwk, message, signatureB64u) {
-  try {
-    const { kty, crv, x, y } = publicJwk || {};
-    if (kty !== 'EC' || crv !== 'P-256') return false;
-    const key = crypto.createPublicKey({ key: { kty, crv, x, y }, format: 'jwk' });
-    return crypto.verify('sha256', Buffer.from(message), { key, dsaEncoding: 'ieee-p1363' }, Buffer.from(String(signatureB64u), 'base64url'));
-  } catch {
-    return false;
-  }
-}
-
 module.exports = {
   randomToken, sha256, safeEqual, hashPassword, verifyPassword, encrypt, decrypt,
-  makeBackupCodes, normalizeBackupCode, randomDigits, verifyEcSignature,
+  makeBackupCodes, normalizeBackupCode,
 };

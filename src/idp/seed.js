@@ -28,14 +28,13 @@ async function ensureSeed() {
   await seedUser({ id: 'u-andi', username: 'andi', email: 'andi@contoh.id', name: 'Andi Pratama', password: 'andi12345', org: KEUANGAN, roles: ['staf', 'keuangan'] });
   await seedUser({ id: 'u-rina', username: 'rina', email: 'rina@contoh.id', name: 'Rina Kusuma', password: 'rina12345', org: UMUM, roles: ['staf'], status: 'disabled' });
 
-  // Andi sudah punya verifikasi dua langkah (aplikasi kode + SMS) dan kode cadangan.
+  // Andi sudah punya verifikasi dua langkah (aplikasi kode / Google Authenticator) dan kode cadangan.
   const andi = await store.getUser('u-andi');
   const andiBackup = ['K7PM-4QXT', 'W2HD-9RNB', 'C8LV-3FJY', 'T5GE-6ZUA', 'P9SK-2MWD'];
   andi.twoFa = {
     enrolledAt: Date.now(),
     methods: {
       totp: { secretEnc: sec.encrypt('JBSWY3DPEHPK3PXP'), lastStep: -1, addedAt: Date.now() },
-      sms: { phoneEnc: sec.encrypt('+6281234567890'), phoneMasked: '+62•••••••7890', addedAt: Date.now() },
     },
     backupCodes: andiBackup.map(c => ({ hash: sec.sha256(c), usedAt: null })),
   };

@@ -36,12 +36,13 @@ npm run db:reset  # kosongkan & isi ulang data demo kapan saja, tanpa harus lewa
 |---|---|---|
 | budi@contoh.id | budi12345 | 2FA opsional → tawaran "Aktifkan sekarang / Nanti saja". Tidak punya hak ke Keuangan. |
 | sari@contoh.id | sari12345 | Organisasi mewajibkan 2FA → pendaftaran wajib tanpa tombol lewati. |
-| andi@contoh.id | andi12345 | Sudah punya 2FA (aplikasi kode + SMS + kode cadangan). |
+| andi@contoh.id | andi12345 | Sudah punya 2FA (aplikasi kode + kode cadangan). |
 | rina@contoh.id | rina12345 | Akun dinonaktifkan → halaman akun terkunci. |
 
-Kode aplikasi (TOTP) Andi bisa dilihat di Panel Demo, atau pindai langsung kode QR di halaman pendaftaran
-(`/2fa/enroll/totp`) dengan Google/Microsoft Authenticator — atau ketik manual kunci `JBSWY3DPEHPK3PXP`.
-SMS dan email tidak benar-benar dikirim; isinya muncul di **Panel Demo → Kotak keluar**.
+Verifikasi dua langkah cuma satu cara: **aplikasi kode TOTP (Google Authenticator)**, plus kode cadangan
+sebagai jalan darurat. Kode aplikasi (TOTP) Andi bisa dilihat di Panel Demo, atau pindai langsung kode QR
+di halaman pendaftaran (`/2fa/enroll/totp`) dengan Google Authenticator — atau ketik manual kunci
+`JBSWY3DPEHPK3PXP`. Email pemulihan akun tidak benar-benar dikirim; isinya muncul di **Panel Demo → Kotak keluar**.
 
 ## Panel Admin
 
@@ -109,7 +110,9 @@ mencegah open redirect).
 | `users` — profil, password hash, status, 2FA (kolom JSON), perangkat tepercaya, consents | Sesi browser `pa_bs` (termasuk status login yang sedang berjalan) |
 | `audit_log` — riwayat keamanan | Tiket sekali pakai (`authorize` → `token`) dan kunci akses |
 | `failed_logouts` — logout yang gagal, untuk ditindaklanjuti | Sesi tiap layanan (dipakai Header Bersama & Alur 4) |
-| `admins` — akun panel admin | Token pemulihan akun (TTL 15 menit), kotak keluar SMS/email simulasi, password/kode cadangan contoh untuk Panel Demo |
+| `admins` — akun panel admin | Token pemulihan akun (TTL 15 menit), counter gagal 2FA + kunci sementaranya, kode cadangan contoh untuk Panel Demo, kotak keluar email simulasi |
+
+Password demo (teks polos, cuma untuk ditampilkan sebagai petunjuk) **dihardcode** di `src/idp/store.js` — bukan di MySQL/Redis, karena bukan data yang perlu bertahan lewat restart.
 
 Lihat `src/idp/store.js` untuk seluruh fungsi akses datanya, dan `sql` schema-nya langsung di `src/db/mysql.js` (dibuat otomatis lewat `CREATE TABLE IF NOT EXISTS`, tidak perlu migration tool terpisah).
 
@@ -119,7 +122,7 @@ Lihat `src/idp/store.js` untuk seluruh fungsi akses datanya, dan `sql` schema-ny
   tetap di memori per proses: itu representasi wajar dari sebuah Service Provider biasa, dan hilang
   begitu saja hanya berarti pengguna diautentikasi ulang lewat SSO (transparan, tanpa mengetik password lagi).
 - Semua berjalan di `localhost`; karena cookie tidak dipisahkan per port, setiap aplikasi memakai nama cookie sendiri. Di produksi, Pusat Akun dan layanan berada di domain berbeda dan wajib memakai HTTPS (cookie `Secure`).
-- "Sidik jari/wajah" disimulasikan dengan kunci ECDSA di `localStorage`. Untuk produksi, gunakan WebAuthn/passkey sungguhan.
+- Verifikasi dua langkah sengaja cuma satu cara (TOTP/Google Authenticator + kode cadangan) — SMS dan sidik jari/wajah (WebAuthn/passkey) tidak diimplementasikan di demo ini.
 - Petunjuk bertanda "Bantuan demo" (kode TOTP, password) dan Panel Demo sengaja membocorkan rahasia agar demo mudah dicoba. Jangan dibawa ke produksi.
-- `SSO_DEMO_KEY` di `.env` dipakai mengenkripsi secret TOTP dan nomor SMS di MySQL — wajib diisi dan tidak
+- `SSO_DEMO_KEY` di `.env` dipakai mengenkripsi secret TOTP di MySQL — wajib diisi dan tidak
   boleh berubah setelah ada data 2FA asli, kalau tidak semuanya tidak bisa dibaca lagi setelah restart.

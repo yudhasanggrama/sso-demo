@@ -214,10 +214,9 @@ async function main() {
   const s = new Browser();
   await s.get(`${P}/login`);
   r = await login(s, 'sari@contoh.id', 'sari12345');
-  assert.match(r.url, /\/2fa\/enroll$/);
+  assert.match(r.url, /\/2fa\/enroll\/totp$/); // satu-satunya metode (TOTP) → tanpa halaman pilih cara
   assert.match(r.text, /tidak dapat dilewati/);
   step('Alur 2: organisasi mewajibkan → pendaftaran wajib tanpa tombol lewati');
-  r = await s.get(`${P}/2fa/enroll/totp`);
   const secret = /class="secret">([A-Z2-7 ]+)</.exec(r.text)[1].replace(/ /g, '');
   r = await s.post(`${P}/2fa/enroll/totp`, { code: totp.codeAt(secret) });
   assert.match(r.text, /Kode cadangan/);

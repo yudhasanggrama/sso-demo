@@ -28,11 +28,6 @@ function accountNote(u) {
   return u.org.require2fa ? 'Organisasi wajibkan 2FA' : '2FA opsional';
 }
 
-async function lastSmsTo(phone) {
-  const m = await store.outboxFindSmsTo(phone);
-  return m ? ui.demoHint(`SMS terakhir ke <span class="mono">${esc(phone)}</span>: “${esc(m.text)}”`) : '';
-}
-
 module.exports = function registerLoginRoutes(app) {
   // ===================== ALUR 1 =====================
 
@@ -301,26 +296,12 @@ module.exports = function registerLoginRoutes(app) {
   }
   const cancelLink = p => (p.purpose === 'settings' ? '<p class="small"><a href="/2fa/cancel">Batal</a></p>' : '');
 
+  // Satu-satunya metode 2FA adalah aplikasi kode (TOTP/Google Authenticator) — tidak ada lagi halaman
+  // "pilih cara verifikasi", langsung ke pendaftaran TOTP.
   app.get('/2fa/enroll', async (req, res) => {
     const c = await core.pendingCtx(req, ['enroll']);
     if (!c) return res.redirect('/');
-    const { bs, p, user } = c;
-    const has = user.twoFa?.methods || {};
-    const intro = p.purpose === 'stepup'
-      ? ui.alert('warn', `Layanan <strong>${esc(p.clientName)}</strong> berisi data sensitif dan mewajibkan verifikasi dua langkah.`)
-      : p.mandatory ? ui.alert('warn', `<strong>${esc(user.org.name)}</strong> mewajibkan verifikasi dua langkah. Langkah ini tidak dapat dilewati.`) : '';
-    const opt = (id, icon, title, desc) => has[id]
-      ? `<div class="choice" style="opacity:.6"><span class="ic">${icon}</span><div><strong>${title}</strong> <span class="tag ok">Sudah aktif</span><br><span class="small muted">${desc}</span></div></div>`
-      : `<a class="choice" href="/2fa/enroll/${id}"><span class="ic">${icon}</span><div><strong>${title}</strong><br><span class="small muted">${desc}</span></div></a>`;
-    res.html(await core.view(bs, {
-      title: 'Aktifkan verifikasi dua langkah', narrow: true, hideMenu: p.purpose === 'login',
-      flow: enrollFlow(p),
-      body: `<div class="card"><h1>Pilih cara verifikasi</h1>${intro}
-        ${opt('totp', '📱', 'Aplikasi kode', 'Google Authenticator, Microsoft Authenticator, Authy, dll.')}
-        ${opt('passkey', '👆', 'Sidik jari atau wajah', 'Kunci perangkat yang disimpan di browser ini (simulasi).')}
-        ${opt('sms', '💬', 'SMS', 'Kode dikirim ke nomor ponsel Anda.')}
-        ${cancelLink(p)}</div>`,
-    }));
+    return res.redirect('/2fa/enroll/totp');
   });
 
   app.get('/2fa/cancel', async (req, res) => {
@@ -356,6 +337,9 @@ module.exports = function registerLoginRoutes(app) {
     }
     const { secret } = p.enroll;
     const uri = totp.otpauthUri(secret, user.email, 'Pusat Akun Demo');
+    const intro = p.purpose === 'stepup'
+      ? ui.alert('warn', `Layanan <strong>${esc(p.clientName)}</strong> berisi data sensitif dan mewajibkan verifikasi dua langkah.`)
+      : p.mandatory ? ui.alert('warn', `<strong>${esc(user.org.name)}</strong> mewajibkan verifikasi dua langkah. Langkah ini tidak dapat dilewati.`) : '';
     res.html(await core.view(bs, {
       title: 'Aplikasi kode', narrow: true, hideMenu: p.purpose === 'login',
       flow: `${enrollFlow(p)} → aplikasi kode (QR)`,
@@ -364,11 +348,12 @@ module.exports = function registerLoginRoutes(app) {
           <div><strong>Aktifkan verifikasi dua langkah</strong><br>
           <span class="small muted">${p.mandatory ? 'Wajib untuk akun ini — tidak dapat dimatikan di sini.' : 'Selesaikan pemindaian QR di bawah untuk mengaktifkannya.'}</span></div></div>
         <h1>📱 Pindai dengan Google Authenticator</h1>
+        ${intro}
         ${error ? ui.alert('error', esc(error)) : ''}
         <div class="qr-panel">
           <div class="qr-box">${qrcode.svgFor(uri)}</div>
           <div class="qr-steps"><ol class="small">
-            <li>Instal aplikasi <strong>Google Authenticator</strong> di ponsel Anda (Microsoft Authenticator atau Authy juga bisa).</li>
+            <li>Instal aplikasi <strong>Google Authenticator</strong> di ponsel Anda.</li>
             <li>Di aplikasi, pilih <em>Tambah akun → Pindai kode QR</em>, lalu arahkan kamera ke kode QR di samping.</li>
             <li>Gunakan kode 6 digit berbasis waktu yang muncul sebagai kode uji coba di bawah ini.</li>
           </ol></div>
@@ -380,7 +365,7 @@ module.exports = function registerLoginRoutes(app) {
           <input id="code" class="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" autofocus required>
           <div style="margin-top:16px"><button class="block">Uji & aktifkan</button></div>
         </form>
-        <p class="small"><a href="/2fa/enroll">← Pilih cara lain</a></p></div>
+        ${cancelLink(p)}</div>
         ${ui.demoHint(`tanpa ponsel? kode saat ini: <strong class="mono">${totp.codeAt(secret)}</strong> (berganti dalam ${totp.secondsLeft()} dtk)`)}`,
     }));
   }
@@ -397,123 +382,6 @@ module.exports = function registerLoginRoutes(app) {
     const step = totp.verify(c.p.enroll.secret, req.body.code);
     if (step == null) return renderTotpEnroll(res, c, 'Kode tidak cocok. Pastikan jam di ponsel sudah benar lalu coba lagi.');
     res.redirect(await finishEnroll(req, c, 'totp', { secretEnc: sec.encrypt(c.p.enroll.secret), lastStep: step }));
-  });
-
-  // --- SMS ---
-  async function renderSmsEnroll(res, c, error) {
-    const { bs, p } = c;
-    const sent = p.enroll?.method === 'sms' && p.enroll.codeHash;
-    res.html(await core.view(bs, {
-      title: 'SMS', narrow: true, hideMenu: p.purpose === 'login',
-      flow: `${enrollFlow(p)} → SMS`,
-      body: `<div class="card"><h1>💬 SMS</h1>
-        ${error ? ui.alert('error', esc(error)) : ''}
-        <form method="post" action="/2fa/enroll/sms/send">
-          <label for="phone">Nomor ponsel</label>
-          <div class="row"><input id="phone" name="phone" type="tel" value="${esc(sent ? p.enroll.phone : '+62')}" style="flex:1" required>
-          <button class="${sent ? 'secondary' : ''}">${sent ? 'Kirim ulang' : 'Kirim kode'}</button></div>
-        </form>
-        ${sent ? `<form method="post" action="/2fa/enroll/sms">
-          <label for="code">Kode dari SMS</label>
-          <input id="code" class="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" autofocus required>
-          <div style="margin-top:16px"><button class="block">Uji & aktifkan</button></div></form>` : ''}
-        <p class="small"><a href="/2fa/enroll">← Pilih cara lain</a></p></div>
-        ${sent ? await lastSmsTo(p.enroll.phone) : ''}`,
-    }));
-  }
-
-  app.get('/2fa/enroll/sms', async (req, res) => {
-    const c = await core.pendingCtx(req, ['enroll']);
-    if (!c) return res.redirect('/');
-    renderSmsEnroll(res, c);
-  });
-
-  app.post('/2fa/enroll/sms/send', async (req, res) => {
-    const c = await core.pendingCtx(req, ['enroll']);
-    if (!c) return res.redirect('/');
-    const phone = String(req.body.phone || '').replace(/[\s-]/g, '');
-    if (!/^\+?\d{9,15}$/.test(phone)) return renderSmsEnroll(res, c, 'Nomor ponsel tidak valid.');
-    const code = sec.randomDigits();
-    c.p.enroll = { method: 'sms', phone, codeHash: sec.sha256(code), expiresAt: Date.now() + policy.smsCodeTtlMs };
-    await core.persist({ bs: c.bs });
-    await store.sendMessage('SMS', phone, `Kode verifikasi Pusat Akun: ${code}. Berlaku 5 menit. Jangan berikan kepada siapa pun.`);
-    res.redirect('/2fa/enroll/sms');
-  });
-
-  app.post('/2fa/enroll/sms', async (req, res) => {
-    const c = await core.pendingCtx(req, ['enroll']);
-    const e = c?.p.enroll;
-    if (!c || e?.method !== 'sms' || !e.codeHash) return res.redirect('/');
-    if (e.expiresAt < Date.now() || !sec.safeEqual(sec.sha256(String(req.body.code || '').trim()), e.codeHash)) {
-      return renderSmsEnroll(res, c, 'Kode salah atau sudah kedaluwarsa.');
-    }
-    const masked = e.phone.slice(0, 3) + '•'.repeat(Math.max(0, e.phone.length - 7)) + e.phone.slice(-4);
-    res.redirect(await finishEnroll(req, c, 'sms', { phoneEnc: sec.encrypt(e.phone), phoneMasked: masked }));
-  });
-
-  // --- Sidik jari / wajah (simulasi: kunci ECDSA disimpan di browser, server menyimpan kunci publik) ---
-  const passkeyScript = ({ mode, challenge, userId, endpoint }) => `<script>
-(() => {
-  const btn = document.getElementById('pk-btn'), out = document.getElementById('pk-out');
-  const KEY = 'pa_passkey_' + ${JSON.stringify(userId)};
-  const alg = { name: 'ECDSA', namedCurve: 'P-256' }, sigAlg = { name: 'ECDSA', hash: 'SHA-256' };
-  const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
-  const msg = new TextEncoder().encode(${JSON.stringify(challenge)});
-  btn.addEventListener('click', async () => {
-    btn.disabled = true; out.textContent = 'Memindai…';
-    try {
-      let payload, toSave = null;
-      if (${JSON.stringify(mode)} === 'register') {
-        const kp = await crypto.subtle.generateKey(alg, true, ['sign', 'verify']);
-        const credId = crypto.randomUUID();
-        payload = { credId, publicJwk: await crypto.subtle.exportKey('jwk', kp.publicKey), signature: b64u(await crypto.subtle.sign(sigAlg, kp.privateKey, msg)) };
-        toSave = { credId, privateJwk: await crypto.subtle.exportKey('jwk', kp.privateKey) };
-      } else {
-        const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
-        if (!saved) throw new Error('Kunci sidik jari/wajah tidak ditemukan di browser ini. Gunakan cara lain.');
-        const priv = await crypto.subtle.importKey('jwk', saved.privateJwk, alg, false, ['sign']);
-        payload = { credId: saved.credId, signature: b64u(await crypto.subtle.sign(sigAlg, priv, msg)) };
-      }
-      const r = await fetch(${JSON.stringify(endpoint)}, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      const j = await r.json();
-      if (!j.ok) {
-        if (j.next) { location.href = j.next; return; } // terkunci permanen → halaman akun terkunci
-        throw new Error(j.error || 'Gagal');
-      }
-      if (toSave) localStorage.setItem(KEY, JSON.stringify(toSave));
-      location.href = j.next;
-    } catch (e) { out.textContent = e.message; btn.disabled = false; }
-  });
-})();
-</script>`;
-
-  app.get('/2fa/enroll/passkey', async (req, res) => {
-    const c = await core.pendingCtx(req, ['enroll']);
-    if (!c) return res.redirect('/');
-    const { bs, p, user } = c;
-    p.enroll = { method: 'passkey', challenge: sec.randomToken(24) };
-    await core.persist({ bs }); // tantangan harus tersimpan supaya POST verifikasi berikutnya bisa mencocokkannya
-    res.html(await core.view(bs, {
-      title: 'Sidik jari atau wajah', narrow: true, hideMenu: p.purpose === 'login',
-      flow: `${enrollFlow(p)} → sidik jari / wajah`,
-      body: `<div class="card"><h1>👆 Sidik jari atau wajah</h1>
-        <p class="muted small">Simulasi: browser membuat pasangan kunci. Kunci privat tetap di perangkat ini; Pusat Akun hanya menyimpan kunci publik.</p>
-        <button id="pk-btn" class="block">Pindai sidik jari (simulasi)</button>
-        <p id="pk-out" class="small muted"></p>
-        <p class="small"><a href="/2fa/enroll">← Pilih cara lain</a></p></div>
-        ${passkeyScript({ mode: 'register', challenge: p.enroll.challenge, userId: user.id, endpoint: '/2fa/enroll/passkey' })}`,
-    }));
-  });
-
-  app.post('/2fa/enroll/passkey', async (req, res) => {
-    const c = await core.pendingCtx(req, ['enroll']);
-    if (!c || c.p.enroll?.method !== 'passkey') return res.json({ ok: false, error: 'Sesi pendaftaran berakhir, muat ulang halaman.' });
-    const { credId, publicJwk, signature } = req.body;
-    if (!credId || !sec.verifyEcSignature(publicJwk, c.p.enroll.challenge, signature)) {
-      return res.json({ ok: false, error: 'Uji coba tanda tangan perangkat gagal.' });
-    }
-    const { kty, crv, x, y } = publicJwk;
-    res.json({ ok: true, next: await finishEnroll(req, c, 'passkey', { credId: String(credId), publicJwk: { kty, crv, x, y } }) });
   });
 
   // Tampilkan kode cadangan (sekali saja)
@@ -558,14 +426,11 @@ module.exports = function registerLoginRoutes(app) {
     const m = user.twoFa.methods;
     const stepup = p.purpose === 'stepup';
     const lockedFor = Math.ceil((user.twoFaLockedUntil - Date.now()) / 1000);
-    p.challenge = sec.randomToken(24);
-    await core.persist({ bs }); // tantangan sidik jari/wajah baru — harus tersimpan sebelum halaman dikirim
 
     const hints = [];
     if (m.totp) hints.push(`kode aplikasi saat ini: <strong class="mono">${totp.codeAt(sec.decrypt(m.totp.secretEnc))}</strong> (${totp.secondsLeft()} dtk)`);
     const demoBackup = await store.demoGetBackupCodes(user.id);
     if (demoBackup) hints.push(`kode cadangan contoh: <span class="mono">${demoBackup.join(', ')}</span>`);
-    const smsHint = m.sms && p.smsSent ? await lastSmsTo(sec.decrypt(m.sms.phoneEnc)) : '';
 
     const body = lockedFor > 0
       ? `<div class="card"><h1>⏳ Terkunci sementara</h1>${ui.alert('error', `Terlalu banyak kode salah. Coba lagi dalam ${lockedFor} detik.`)}
@@ -575,20 +440,16 @@ module.exports = function registerLoginRoutes(app) {
         <div class="row">${ui.avatar(user, 32)}<span class="small">${esc(user.email)}</span></div>
         ${info ? ui.alert('ok', esc(info)) : ''}${error ? ui.alert('error', esc(error)) : ''}
         <form method="post" action="/2fa/verify">
-          <label for="code">Kode dari ${[m.totp && 'aplikasi', m.sms && 'SMS', 'kode cadangan'].filter(Boolean).join(', ')}</label>
+          <label for="code">Kode dari aplikasi atau kode cadangan</label>
           <input id="code" class="code" name="code" autocomplete="one-time-code" maxlength="9" autofocus required>
           <div style="margin-top:16px"><button class="block">Verifikasi</button></div>
         </form>
-        ${m.sms || m.passkey ? '<h3>Cara lain</h3>' : ''}
-        ${m.sms ? `<form method="post" action="/2fa/verify/sms"><button class="choice" type="submit"><span class="ic">💬</span><span>Kirim kode SMS ke <span class="mono">${esc(m.sms.phoneMasked)}</span></span></button></form>` : ''}
-        ${m.passkey ? `<button id="pk-btn" class="choice" type="button"><span class="ic">👆</span><span>Gunakan sidik jari atau wajah</span></button><p id="pk-out" class="small" style="color:var(--danger)"></p>
-          ${passkeyScript({ mode: 'verify', challenge: p.challenge, userId: user.id, endpoint: '/2fa/verify/passkey' })}` : ''}
         ${stepup ? `<p class="small"><a href="/">Batal, kembali ke Halaman Utama</a></p>` : ''}
-      </div>${hints.length ? ui.demoHint(hints.join('<br>')) : ''}${smsHint}`;
+      </div>${hints.length ? ui.demoHint(hints.join('<br>')) : ''}`;
 
     res.html(await core.view(bs, {
       title: 'Verifikasi', narrow: true, hideMenu: !stepup,
-      flow: stepup ? `Alur 3 · Layanan sensitif → minta kode verifikasi lagi` : 'Alur 2 · Perangkat belum tepercaya → masukkan kode dari aplikasi, SMS, atau kode cadangan',
+      flow: stepup ? `Alur 3 · Layanan sensitif → minta kode verifikasi lagi` : 'Alur 2 · Perangkat belum tepercaya → masukkan kode dari aplikasi atau kode cadangan',
       body,
     }));
   }
@@ -596,18 +457,7 @@ module.exports = function registerLoginRoutes(app) {
   app.get('/2fa/verify', async (req, res) => {
     const c = await core.pendingCtx(req, ['verify']);
     if (!c) return res.redirect('/');
-    renderVerify(res, c, { info: req.query.sent === '1' ? 'Kode SMS sudah dikirim.' : null });
-  });
-
-  app.post('/2fa/verify/sms', async (req, res) => {
-    const c = await core.pendingCtx(req, ['verify']);
-    if (!c || !c.user.twoFa.methods.sms) return res.redirect('/');
-    const phone = sec.decrypt(c.user.twoFa.methods.sms.phoneEnc);
-    const code = sec.randomDigits();
-    Object.assign(c.p, { sms: { codeHash: sec.sha256(code), expiresAt: Date.now() + policy.smsCodeTtlMs, used: false }, smsSent: true });
-    await core.persist({ bs: c.bs });
-    await store.sendMessage('SMS', phone, `Kode masuk Pusat Akun: ${code}. Berlaku 5 menit.`);
-    res.redirect('/2fa/verify?sent=1');
+    renderVerify(res, c);
   });
 
   // "Kode benar, masih berlaku, dan belum pernah dipakai?"
@@ -617,10 +467,6 @@ module.exports = function registerLoginRoutes(app) {
     if (m.totp) {
       const step = totp.verify(sec.decrypt(m.totp.secretEnc), code, m.totp.lastStep);
       if (step != null) { m.totp.lastStep = step; return 'totp'; }
-    }
-    if (p.sms && !p.sms.used && p.sms.expiresAt > Date.now() && /^\d{6}$/.test(code) && sec.safeEqual(sec.sha256(code), p.sms.codeHash)) {
-      p.sms.used = true;
-      return 'sms';
     }
     const backup = user.twoFa.backupCodes.find(b => !b.usedAt && sec.safeEqual(b.hash, sec.sha256(sec.normalizeBackupCode(code))));
     if (backup) { backup.usedAt = Date.now(); return 'backup'; }
@@ -684,23 +530,6 @@ module.exports = function registerLoginRoutes(app) {
     const next = await passCode(req, c, method);
     await core.persist(c);
     res.redirect(next);
-  });
-
-  app.post('/2fa/verify/passkey', async (req, res) => {
-    const c = await core.pendingCtx(req, ['verify']);
-    if (!c) return res.json({ ok: false, error: 'Sesi berakhir, muat ulang halaman.' });
-    const pk = c.user.twoFa.methods.passkey;
-    if (c.user.twoFaLockedUntil > Date.now()) return res.json({ ok: false, error: 'Terkunci sementara.' });
-    const ok = pk && c.p.challenge && req.body.credId === pk.credId && sec.verifyEcSignature(pk.publicJwk, c.p.challenge, req.body.signature);
-    c.p.challenge = null; // tantangan sekali pakai
-    if (!ok) {
-      const fail = await failCode(req, c);
-      await core.persist(c);
-      return res.json({ ok: false, error: fail.message, next: fail.locked ? '/locked' : undefined });
-    }
-    const next = await passCode(req, c, 'passkey');
-    await core.persist(c);
-    res.json({ ok: true, next });
   });
 
   // "Tawarkan: percayai perangkat ini selama 30 hari"

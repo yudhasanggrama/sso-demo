@@ -4,8 +4,10 @@
 //    consents sebagai kolom JSON), riwayat keamanan (audit_log), logout gagal, dan admin.
 //  · Redis: data SESI/SEMENTARA — penanda sesi browser (termasuk status login yang sedang
 //    berjalan), tiket sekali pakai, kunci akses, sesi tiap layanan, token pemulihan, counter
-//    gagal 2FA beserta kunci sementaranya (TTL bawaan, wajar kedaluwarsa sendiri), dan bantuan
-//    demo (password/kode cadangan contoh, kotak keluar SMS/email simulasi).
+//    gagal 2FA beserta kunci sementaranya (TTL bawaan, wajar kedaluwarsa sendiri), dan kode
+//    cadangan contoh untuk Panel Demo, serta kotak keluar email simulasi (tautan pemulihan akun).
+//  · Memori proses (bukan Redis/MySQL): password demo dalam teks polos (demoPasswords di bawah) —
+//    cuma petunjuk tampilan, bukan data yang perlu dibagi antar proses atau bertahan lewat restart.
 const sec = require('../lib/security');
 const cfg = require('../config');
 const db = require('../db/mysql');
@@ -309,13 +311,21 @@ async function outboxRecent(limit = 15) {
   const items = await redis.client.lRange('sso:outbox', 0, limit - 1);
   return items.map(x => JSON.parse(x));
 }
-async function outboxFindSmsTo(phone) {
-  const items = await outboxRecent(200);
-  return items.find(x => x.channel === 'SMS' && x.to === phone) || null;
-}
 
-async function demoSetPassword(userId, pw) { await redis.client.set(`sso:demo:pw:${userId}`, pw); }
-async function demoGetPassword(userId) { return redis.client.get(`sso:demo:pw:${userId}`); }
+// Password demo (teks polos, cuma untuk ditampilkan sebagai petunjuk di UI) sengaja TIDAK di Redis dan
+// tidak bergantung pada proses seed — dihardcode langsung di sini, supaya tetap benar walau server
+// direstart tanpa menjalankan ulang seed (tabel users sudah terisi dari sebelumnya, ensureSeed dilewati).
+// Kalau password sungguhan diganti (lewat "Ganti password" atau pemulihan akun), map ini diperbarui juga
+// supaya hint tetap sesuai SELAMA proses ini berjalan; setelah restart lagi, hint kembali ke nilai awal.
+const demoPasswords = new Map([
+  ['u-budi', 'budi12345'],
+  ['u-sari', 'sari12345'],
+  ['u-andi', 'andi12345'],
+  ['u-rina', 'rina12345'],
+]);
+async function demoSetPassword(userId, pw) { demoPasswords.set(userId, pw); }
+async function demoGetPassword(userId) { return demoPasswords.get(userId) ?? null; }
+
 async function demoSetBackupCodes(userId, codes) { await redis.setJSON(`sso:demo:backup:${userId}`, codes); }
 async function demoGetBackupCodes(userId) { return redis.getJSON(`sso:demo:backup:${userId}`); }
 async function demoDeleteBackupCodes(userId) { await redis.client.del(`sso:demo:backup:${userId}`); }
@@ -325,6 +335,7 @@ async function demoDeleteBackupCodes(userId) { await redis.client.del(`sso:demo:
 async function resetAllForTests() {
   for (const t of ['users', 'audit_log', 'failed_logouts', 'admins']) await db.pool.query(`TRUNCATE TABLE ${t}`);
   await redis.client.flushDb();
+  demoPasswords.clear();
 }
 
 module.exports = {
@@ -338,6 +349,6 @@ module.exports = {
   setAuthCode, getAuthCode, updateAuthCode, deleteAuthCode,
   setAccessToken, getAccessToken, revokeTokens,
   setRecoveryToken, getRecoveryToken, deleteRecoveryToken,
-  sendMessage, outboxRecent, outboxFindSmsTo,
+  sendMessage, outboxRecent,
   demoSetPassword, demoGetPassword, demoSetBackupCodes, demoGetBackupCodes, demoDeleteBackupCodes,
 };

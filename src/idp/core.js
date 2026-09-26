@@ -23,9 +23,7 @@ const signToken = (payload, typ) => jwt.sign(payload, privateKey, KID, typ);
 // ---- Label ----
 const METHOD_LABEL = {
   pwd: 'Password',
-  totp: 'Aplikasi kode',
-  sms: 'SMS',
-  passkey: 'Sidik jari / wajah',
+  totp: 'Aplikasi kode (Google Authenticator)',
   backup: 'Kode cadangan',
   trusted_device: 'Perangkat tepercaya',
 };

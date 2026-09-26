@@ -66,7 +66,6 @@ const policy = {
   max2faFailures: 5,            // Alur 2: "kunci sementara bila berulang"
   twoFaLockMs: 60_000,
   trustDeviceDays: 30,          // Alur 2: "percayai perangkat ini selama 30 hari"
-  smsCodeTtlMs: 5 * 60_000,
   authCodeTtlMs: 60_000,        // Alur 3: "tiket sekali pakai, masa berlaku sangat singkat"
   stepUpMaxAgeMs: 5 * 60_000,   // Alur 3: layanan sensitif butuh verifikasi dua langkah yang masih baru
   idTokenTtlSec: 300,

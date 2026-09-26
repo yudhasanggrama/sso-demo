@@ -54,9 +54,9 @@ module.exports = function registerAccountRoutes(app) {
     const myDevice = req.cookies[core.DEV_COOKIE] && sec.sha256(req.cookies[core.DEV_COOKIE]);
 
     const methodRows = Object.entries(m).map(([k, v]) =>
-      `<tr><td>${esc(core.METHOD_LABEL[k])}</td><td class="small">${k === 'sms' ? esc(v.phoneMasked) : k === 'passkey' ? 'Kunci di browser ini' : 'Terdaftar'}</td><td class="small">${ui.fmtTime(v.addedAt)}</td></tr>`).join('');
+      `<tr><td>${esc(core.METHOD_LABEL[k])}</td><td class="small">Terdaftar</td><td class="small">${ui.fmtTime(v.addedAt)}</td></tr>`).join('');
     const backupLeft = user.twoFa ? user.twoFa.backupCodes.filter(b => !b.usedAt).length : 0;
-    const missing = ['totp', 'passkey', 'sms'].filter(k => !m[k]);
+    const missing = ['totp'].filter(k => !m[k]);
 
     const devices = user.trustedDevices.filter(d => d.expiresAt > now).map(d =>
       `<tr><td>${esc(d.label)} ${d.deviceHash === myDevice ? '<span class="tag info">Perangkat ini</span>' : ''}</td><td class="small">${esc(d.location)}</td><td class="small">s.d. ${ui.fmtTime(d.expiresAt)}</td>

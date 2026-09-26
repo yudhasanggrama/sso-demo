@@ -9,7 +9,7 @@ const { createService } = require('./service/server');
 async function main() {
   if (!process.env.SSO_DEMO_KEY) {
     console.warn('\n⚠️  SSO_DEMO_KEY belum diisi di .env — kunci enkripsi 2FA dibuat acak tiap kali server start.');
-    console.warn('   Data 2FA yang sudah ada (TOTP, SMS) tidak akan terbaca lagi setelah restart. Lihat .env.example.\n');
+    console.warn('   Data 2FA (TOTP) yang sudah ada tidak akan terbaca lagi setelah restart. Lihat .env.example.\n');
   }
 
   await store.init(); // migrasi skema MySQL + sambungkan Redis
