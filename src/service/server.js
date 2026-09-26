@@ -48,11 +48,32 @@ function createService(svc) {
     return { status: r.status, data: await r.json() };
   }
 
-  function page(res, { title, flow, body, user, status = 200 }) {
-    const right = user
-      ? `<span class="small muted">${esc(user.email || user.preferred_username || user.sub)}</span>
-         <a class="btn sm ghost" href="${PORTAL}/">Portal</a><a class="btn sm secondary" href="${PORTAL}/logout">Keluar</a>`
-      : `<a class="btn sm ghost" href="${PORTAL}/">Portal</a>`;
+  // Alur 3a · Header Bersama: minta ke Pusat Akun daftar akun + layanan untuk sid ini,
+  // supaya grid 3x3 dan avatar terlihat identik dengan Portal (fallback sederhana bila Pusat Akun tak terjangkau).
+  async function fetchHeaderContext(sid) {
+    if (!sid) return null;
+    try {
+      const r = await idp('/internal/header', { sid });
+      return r.status === 200 ? r.data : null;
+    } catch { return null; }
+  }
+
+  async function page(res, { title, flow, body, user, sid, status = 200 }) {
+    let right;
+    const ctx = user && await fetchHeaderContext(sid);
+    if (ctx) {
+      const others = ctx.accounts.filter(a => a.id !== ctx.user.id);
+      right = ui.appLauncher(ctx.services, PORTAL) + ui.avatarMenu({
+        user: ctx.user, others, switchAction: `${PORTAL}/switch`,
+        addHref: `${PORTAL}/login?add=1`, manageHref: `${PORTAL}/account`, logoutHref: `${PORTAL}/logout`,
+        returnTo: `${svc.url}/`,
+      });
+    } else if (user) {
+      right = `<span class="small muted">${esc(user.email || user.preferred_username || user.sub)}</span>
+         <a class="btn sm ghost" href="${PORTAL}/">Portal</a><a class="btn sm secondary" href="${PORTAL}/logout">Keluar</a>`;
+    } else {
+      right = `<a class="btn sm ghost" href="${PORTAL}/">Portal</a>`;
+    }
     res.html(ui.page({ title, brand, flow, body, right }), status);
   }
 
@@ -75,7 +96,7 @@ function createService(svc) {
   async function denied(req, res, reason, sub) {
     log(`INSIDEN: ${reason}`);
     await idp('/internal/incident', { reason, sub: sub || '', ip: req.ip, ua: req.ua }).catch(() => {});
-    page(res, {
+    await page(res, {
       title: 'Akses ditolak', status: 403,
       flow: 'Alur 3 · Kartu identitas tidak sah → akses ditolak dan dicatat sebagai insiden keamanan',
       body: `<div class="card"><h1>⛔ Akses ditolak</h1>${ui.alert('error', esc(reason))}
@@ -110,9 +131,9 @@ function createService(svc) {
     }
 
     const c = s.claims;
-    page(res, {
-      title: svc.name, user: c,
-      flow: 'Alur 3 · Layanan terbuka',
+    await page(res, {
+      title: svc.name, user: c, sid: c.sid,
+      flow: 'Alur 3b · Layanan terbuka, header bersama dengan Portal',
       body: `<h1>${svc.icon} ${esc(svc.name)}</h1>
         <p class="muted">Halo, ${esc(c.name || c.preferred_username || c.sub)}. Anda masuk lewat Pusat Akun tanpa mengetik password di layanan ini.</p>
         ${content[svc.id](c)}

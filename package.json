@@ -1,14 +1,22 @@
 {
   "name": "sso-demo",
   "version": "1.0.0",
-  "description": "Demo Single Sign-On (Pusat Akun + beberapa layanan) sesuai flowchart Alur 1-5",
+  "description": "Demo Single Sign-On (Pusat Akun + beberapa layanan) sesuai flowchart Alur 1-5 — Express, MySQL, Redis",
   "private": true,
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node test/smoke.js"
+    "test": "node test/smoke.js",
+    "db:reset": "node scripts/reset-db.js"
   },
   "engines": {
     "node": ">=18.17"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^18.0.4",
+    "express": "^5.2.1",
+    "mysql2": "^3.24.4",
+    "redis": "^6.2.1"
   }
 }

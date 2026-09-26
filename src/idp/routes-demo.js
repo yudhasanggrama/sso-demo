@@ -20,23 +20,26 @@ async function serviceState(s) {
 
 module.exports = function registerDemoRoutes(app) {
   app.get('/demo', async (req, res) => {
-    const bs = core.loadBS(req);
+    const bs = await core.loadBS(req);
     const states = await Promise.all(cfg.services.map(serviceState));
 
-    const users = [...store.users.values()].map(u => {
+    const allUsers = await store.listUsers();
+    const users = (await Promise.all(allUsers.map(async u => {
       const m = u.twoFa?.methods || {};
       const code = m.totp ? `<strong class="mono">${totp.codeAt(sec.decrypt(m.totp.secretEnc))}</strong>` : '—';
       const status = u.status === 'active' ? '<span class="tag ok">Aktif</span>' : u.status === 'locked' ? '<span class="tag err">Terkunci</span>' : '<span class="tag">Nonaktif</span>';
-      return `<tr><td>${esc(u.email)}<br><span class="small muted mono">${esc(store.demo.passwords[u.id])}</span></td><td>${status}</td>
+      const pw = await store.demoGetPassword(u.id);
+      const backup = await store.demoGetBackupCodes(u.id);
+      return `<tr><td>${esc(u.email)}<br><span class="small muted mono">${esc(pw)}</span></td><td>${status}</td>
         <td class="small">${esc(u.org.name)}${u.org.require2fa ? ' <span class="tag warn">wajib 2FA</span>' : ''}<br>${u.roles.map(esc).join(', ')}</td>
         <td class="small">${Object.keys(m).map(k => esc(core.METHOD_LABEL[k])).join(', ') || '—'}</td><td>${code}</td>
-        <td class="small mono">${(store.demo.backupCodes[u.id] || []).map(esc).join('<br>') || '—'}</td>
+        <td class="small mono">${(backup || []).map(esc).join('<br>') || '—'}</td>
         <td><form method="post" action="/demo/reset-user" class="stack"><input type="hidden" name="userId" value="${esc(u.id)}">
           ${u.status === 'locked' ? '<button class="sm" name="what" value="unlock">Buka kunci</button>' : ''}
           ${core.hasTwoFa(u) && u.id !== 'u-andi' ? '<button class="sm ghost" name="what" value="2fa">Hapus 2FA</button>' : ''}
           ${u.trustedDevices.length ? '<button class="sm ghost" name="what" value="devices">Lupakan perangkat</button>' : ''}
           ${Object.keys(u.consents).length ? '<button class="sm ghost" name="what" value="consents">Hapus persetujuan</button>' : ''}</form></td></tr>`;
-    }).join('');
+    }))).join('');
 
     const services = cfg.services.map((s, i) => {
       const st = states[i];
@@ -48,17 +51,24 @@ module.exports = function registerDemoRoutes(app) {
         <td><a class="btn sm ghost" href="${s.url}/demo/forged">Kirim token palsu</a></td></tr>`;
     }).join('');
 
-    const failed = store.failedLogouts.map(f => `<tr><td class="small">${ui.fmtTime(f.at)}</td><td>${esc(cfg.clients[f.clientId].name)}</td>
-      <td class="small">${esc(store.users.get(f.userId)?.email)}</td><td class="small">${esc(f.lastError)} (${f.attempts}×)</td>
+    const failedItems = await store.listFailedLogouts();
+    const failedUserEmails = Object.fromEntries(await Promise.all([...new Set(failedItems.map(f => f.userId))]
+      .map(async id => [id, (await store.getUser(id))?.email])));
+    const failed = failedItems.map(f => `<tr><td class="small">${ui.fmtTime(f.at)}</td><td>${esc(cfg.clients[f.clientId].name)}</td>
+      <td class="small">${esc(failedUserEmails[f.userId])}</td><td class="small">${esc(f.lastError)} (${f.attempts}×)</td>
       <td>${f.resolved ? '<span class="tag ok">Selesai</span>' : `<form method="post" action="/demo/failed-logouts/${esc(f.id)}/retry"><button class="sm">Coba lagi</button></form>`}</td></tr>`).join('');
 
-    const outbox = store.outbox.slice(0, 15).map(o => `<tr><td class="small">${ui.fmtTime(o.at)}</td><td><span class="tag">${esc(o.channel)}</span></td><td class="small mono">${esc(o.to)}</td>
+    const outboxItems = await store.outboxRecent(15);
+    const outbox = outboxItems.map(o => `<tr><td class="small">${ui.fmtTime(o.at)}</td><td><span class="tag">${esc(o.channel)}</span></td><td class="small mono">${esc(o.to)}</td>
       <td class="small">${esc(o.text).replace(/(http:\/\/localhost:\d+\/\S+)/g, '<a href="$1">$1</a>')}</td></tr>`).join('');
 
-    const audit = store.audit.slice(0, 60).map(e => `<tr><td class="small">${ui.fmtTime(e.at)}</td><td class="small">${esc(store.users.get(e.userId)?.email || '—')}</td>
+    const auditItems = await store.auditRecent(60);
+    const auditUserEmails = Object.fromEntries(await Promise.all([...new Set(auditItems.map(e => e.userId).filter(Boolean))]
+      .map(async id => [id, (await store.getUser(id))?.email])));
+    const audit = auditItems.map(e => `<tr><td class="small">${ui.fmtTime(e.at)}</td><td class="small">${esc(auditUserEmails[e.userId] || '—')}</td>
       <td class="lvl-${e.level}">${esc(e.title)}</td><td class="small muted">${esc(e.detail)}</td></tr>`).join('');
 
-    res.html(core.view(bs, {
+    res.html(await core.view(bs, {
       title: 'Panel Demo',
       flow: 'Alat bantu demo — bukan bagian dari flowchart',
       body: `<h1>Panel Demo</h1><p class="muted">Gunakan panel ini untuk mencoba setiap cabang flowchart. <a href="/demo">Muat ulang</a> · kode aplikasi berganti dalam ${totp.secondsLeft()} dtk.</p>
@@ -76,14 +86,15 @@ module.exports = function registerDemoRoutes(app) {
     }));
   });
 
-  app.post('/demo/reset-user', (req, res) => {
-    const u = store.users.get(req.body.userId);
+  app.post('/demo/reset-user', async (req, res) => {
+    const u = await store.getUser(req.body.userId);
     if (u) {
       if (req.body.what === 'unlock' && u.status === 'locked') Object.assign(u, { status: 'active', failedLogins: 0 });
       if (req.body.what === '2fa') Object.assign(u, { twoFa: null, trustedDevices: [], twoFaDeferredAt: 0 });
       if (req.body.what === 'devices') u.trustedDevices = [];
       if (req.body.what === 'consents') u.consents = {};
-      store.addAudit({ userId: u.id, level: 'info', title: `Panel demo: ${req.body.what}` });
+      await store.saveUser(u);
+      await store.addAudit({ userId: u.id, level: 'info', title: `Panel demo: ${req.body.what}` });
     }
     res.redirect('/demo');
   });
@@ -101,11 +112,12 @@ module.exports = function registerDemoRoutes(app) {
   });
 
   app.post('/demo/failed-logouts/:id/retry', async (req, res) => {
-    const f = store.failedLogouts.find(x => x.id === req.params.id);
+    const f = await store.getFailedLogout(req.params.id);
     if (f && !f.resolved) {
       const r = await core.backchannelLogout(f, { recordFailure: false });
-      Object.assign(f, { attempts: f.attempts + r.attempts, lastError: r.ok ? '' : r.error, resolved: r.ok });
-      store.addAudit({ userId: f.userId, level: r.ok ? 'info' : 'warn', title: `Tindak lanjut logout ${cfg.clients[f.clientId].name}`, detail: r.ok ? 'Berhasil ditutup' : r.error });
+      const patch = { attempts: f.attempts + r.attempts, lastError: r.ok ? '' : r.error, resolved: r.ok };
+      await store.updateFailedLogout(f.id, patch);
+      await store.addAudit({ userId: f.userId, level: r.ok ? 'info' : 'warn', title: `Tindak lanjut logout ${cfg.clients[f.clientId].name}`, detail: r.ok ? 'Berhasil ditutup' : r.error });
     }
     res.redirect('/demo');
   });

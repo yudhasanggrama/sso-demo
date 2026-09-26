@@ -1,8 +1,9 @@
 'use strict';
 // Tes end-to-end: menjalankan server lalu menelusuri cabang-cabang flowchart seperti browser sungguhan.
+// Data sekarang tersimpan sungguhan di MySQL/Redis (bukan lagi di memori), jadi supaya tesnya
+// deterministik, dikosongkan dulu ke keadaan bersih sebelum server dinyalakan.
 const assert = require('assert');
 const totp = require('../src/lib/totp');
-require('../src/index');
 
 const P = 'http://localhost:3000';
 const SUREL = 'http://localhost:4001';
@@ -56,8 +57,24 @@ async function login(b, email, password) {
   return b.post(`${P}/login/password`, { password });
 }
 
+async function waitReady(url, tries = 60) {
+  for (let i = 0; i < tries; i++) {
+    try { const r = await fetch(url); if (r.status < 500) return; } catch { /* belum siap, coba lagi */ }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  throw new Error(`Server tidak siap setelah menunggu: ${url}`);
+}
+
 async function main() {
-  await new Promise(r => setTimeout(r, 400));
+  // Kosongkan MySQL + Redis dulu supaya tiap kali npm test dijalankan mulai dari akun contoh yang sama persis
+  // (dulu ini otomatis terjadi karena datanya cuma hidup di memori dan hilang tiap proses baru).
+  const store = require('../src/idp/store');
+  await store.init();
+  await store.resetAllForTests();
+
+  require('../src/index'); // menyalakan Portal + tiap layanan; akan mem-seed ulang karena tabel baru dikosongkan
+  await waitReady(`${P}/`);
+
   const b = new Browser();
 
   // --- Alur 1: tamu ---
@@ -208,20 +225,25 @@ async function main() {
   assert.match(r.text, /Halo, Sari/);
   step('Alur 2: uji kode pertama → simpan terenkripsi + kode cadangan → dikenali');
 
-  // --- Kunci akun ---
+  // --- Password salah berkali-kali TIDAK membatasi atau mengunci akun (anti account-lockout DoS) ---
   const x = new Browser();
   await x.get(`${P}/login`);
   await x.post(`${P}/login/identifier`, { login: 'budi' });
-  for (let i = 0; i < 5; i++) r = await x.post(`${P}/login/password`, { password: 'salah' });
-  assert.match(r.url, /\/locked$/);
-  step('Alur 1: gagal terlalu sering → halaman akun terkunci');
+  for (let i = 0; i < 8; i++) r = await x.post(`${P}/login/password`, { password: 'salah' });
+  assert.match(r.url, /\/login\/password$/);
+  assert.match(r.text, /Email atau password salah/);
+  step('Alur 1: password salah berkali-kali → tetap boleh coba lagi, akun tidak terkunci');
+  r = await x.post(`${P}/login/password`, { password: 'budi12345' });
+  assert.match(r.url, /\/login\/2fa\/offer$/);
+  step('Alur 1: password yang benar tetap berhasil setelahnya');
+
   r = await x.post(`${P}/login/identifier`, { login: 'rina' });
   assert.match(r.text, /dinonaktifkan/);
   step('Alur 1: akun nonaktif → halaman akun terkunci');
 
   r = await x.get(`${P}/demo`);
   assert.match(r.text, /Insiden keamanan di layanan Surel/);
-  assert.match(r.text, /Akun dikunci otomatis/);
+  assert.match(r.text, /Percobaan gagal ke-8/);
   step('Riwayat keamanan mencatat semuanya');
 
   console.log('\nSemua tes lolos.');

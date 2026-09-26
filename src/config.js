@@ -1,4 +1,14 @@
 'use strict';
+require('dotenv').config();
+
+const mysql = {
+  host: process.env.MYSQL_HOST || '127.0.0.1',
+  port: Number(process.env.MYSQL_PORT || 3306),
+  user: process.env.MYSQL_USER || 'root',
+  password: process.env.MYSQL_PASSWORD || '',
+  database: process.env.MYSQL_DATABASE || 'db_sso_demo',
+};
+const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
 const PORTAL_PORT = Number(process.env.PORTAL_PORT || 3000);
 const PORTAL = `http://localhost:${PORTAL_PORT}`;
@@ -50,7 +60,9 @@ const clients = Object.fromEntries(services.map(s => [s.id, s]));
 
 const policy = {
   browserSessionDays: 7,        // Alur 1: "masih dikenali dari kunjungan sebelumnya"
-  maxPasswordFailures: 5,       // Alur 1: "sudah gagal terlalu sering?"
+  // Sengaja TIDAK ADA batas percobaan/lockout untuk password (Alur 1): mengunci akun karena tebakan
+  // password memungkinkan account-lockout denial-of-service (siapa pun yang tahu email korban bisa
+  // mengunci akunnya). Limit hanya berlaku di 2FA (di bawah), yang baru tercapai setelah password benar.
   max2faFailures: 5,            // Alur 2: "kunci sementara bila berulang"
   twoFaLockMs: 60_000,
   trustDeviceDays: 30,          // Alur 2: "percayai perangkat ini selama 30 hari"
@@ -68,4 +80,4 @@ const ACR_MFA = 'urn:pusat-akun:mfa';
 const ACR_PWD = 'urn:pusat-akun:pwd';
 const BACKCHANNEL_LOGOUT_EVENT = 'http://schemas.openid.net/event/backchannel-logout';
 
-module.exports = { PORTAL, PORTAL_PORT, services, clients, policy, ACR_MFA, ACR_PWD, BACKCHANNEL_LOGOUT_EVENT };
+module.exports = { PORTAL, PORTAL_PORT, services, clients, policy, ACR_MFA, ACR_PWD, BACKCHANNEL_LOGOUT_EVENT, mysql, redisUrl };

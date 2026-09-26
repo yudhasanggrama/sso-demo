@@ -61,6 +61,9 @@ button:disabled{opacity:.6;cursor:wait}
 details.menu{position:relative}
 details.menu>summary{list-style:none;cursor:pointer;border-radius:50%}
 details.menu>summary::-webkit-details-marker{display:none}
+details.menu>summary.waffle-btn{border-radius:8px;padding:6px;color:var(--muted);display:grid;place-items:center;width:36px;height:36px}
+details.menu>summary.waffle-btn:hover{background:#f3f4f6;color:var(--text)}
+details[open]>summary.waffle-btn{background:#eef2ff;color:var(--accent)}
 .menu-panel{position:absolute;right:0;top:46px;width:310px;background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:0 12px 32px rgba(0,0,0,.14);padding:8px;z-index:10}
 .menu-head{display:flex;gap:12px;align-items:center;padding:10px}
 .menu-label{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;padding:10px 10px 4px}
@@ -68,6 +71,11 @@ details.menu>summary::-webkit-details-marker{display:none}
 .menu-item:hover{background:#f3f4f6}
 .menu-panel form{margin:0}
 .menu-panel hr{border:0;border-top:1px solid var(--border);margin:6px 0}
+.apps-panel{width:264px}
+.apps-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:6px}
+.app-tile{display:flex;flex-direction:column;align-items:center;gap:5px;padding:14px 6px 10px;border-radius:10px;text-decoration:none;color:var(--text);font-size:12px;font-weight:600;text-align:center;border-top:3px solid var(--c);transition:background .1s}
+.app-tile:hover{background:#f3f4f6}
+.app-tile-icon{font-size:22px;line-height:1}
 table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border);vertical-align:top}
 th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
@@ -84,7 +92,47 @@ code,.mono{font-family:ui-monospace,Consolas,monospace;font-size:13px}
 @media (max-width:760px){.two{grid-template-columns:1fr}}
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;font-size:14px}
 .kv dt{color:var(--muted)}.kv dd{margin:0;word-break:break-all}
+.toggle-row{display:flex;align-items:flex-start;gap:12px;padding:14px;border:1px solid var(--border);border-radius:12px;background:#fafafa;margin-bottom:16px}
+.toggle-row input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent);margin-top:2px;flex:none}
+.toggle-row strong{font-size:15px}
+.qr-panel{display:flex;gap:24px;align-items:center;flex-wrap:wrap;margin:16px 0}
+.qr-box{flex:none;background:#fff;border:1px solid var(--border);border-radius:14px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,.06);line-height:0}
+.qr-box svg{display:block;width:176px;height:176px}
+.qr-steps{flex:1;min-width:220px}
+.qr-steps ol{margin:0;padding-left:20px}
+.qr-steps li{margin-bottom:9px}
 `;
+
+const WAFFLE_ICON = `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">${[5, 12, 19].flatMap(cy => [5, 12, 19].map(cx => `<circle cx="${cx}" cy="${cy}" r="2"/>`)).join('')}</svg>`;
+
+// Header Bersama (Alur 3a) — grid 3x3 layanan. Data polos (bukan objek store) supaya bisa dipakai
+// baik oleh Portal (langsung) maupun tiap Service Provider (lewat panggilan /internal/header).
+function appLauncher(services, portalUrl) {
+  const tiles = services.map(s => `<a class="app-tile" href="${esc(s.url)}/" style="--c:${esc(s.color)}"><span class="app-tile-icon">${s.icon}</span><span>${esc(s.name)}</span></a>`).join('');
+  return `<details class="menu"><summary class="waffle-btn" title="Semua layanan">${WAFFLE_ICON}</summary><div class="menu-panel apps-panel">
+    <div class="menu-label">Layanan Anda</div>
+    <div class="apps-grid">${tiles || '<div class="menu-item muted small">Tidak ada layanan untuk akun ini</div>'}</div>
+    <hr><a class="menu-item" href="${esc(portalUrl)}/">🏠 Portal</a>
+  </div></details>`;
+}
+
+// Menu avatar (Alur 4) — markup yang sama persis dipakai di Portal dan di tiap layanan,
+// hanya tujuan form/link yang berbeda (lokal di Portal, absolut lewat Pusat Akun bila dari layanan).
+function avatarMenu({ user, others = [], switchAction, addHref, manageHref, logoutHref, returnTo }) {
+  const switchItems = others.length
+    ? others.map(o => `<form method="post" action="${esc(switchAction)}"><input type="hidden" name="userId" value="${esc(o.id)}">${returnTo ? `<input type="hidden" name="return" value="${esc(returnTo)}">` : ''}
+        <button class="menu-item">${avatar(o, 28)}<span>${esc(o.name)}<br><span class="muted small">${esc(o.email)}</span></span></button></form>`).join('')
+    : '<div class="menu-item muted small">Belum ada akun lain di browser ini</div>';
+  return `<details class="menu"><summary title="Menu akun">${avatar(user)}</summary><div class="menu-panel">
+    <div class="menu-head">${avatar(user, 44)}<div><strong>${esc(user.name)}</strong><div class="muted small">${esc(user.email)}</div></div></div>
+    <hr>
+    <a class="menu-item" href="${esc(addHref)}">➕ Tambah akun</a>
+    <div class="menu-label">Ganti akun</div>${switchItems}
+    <hr>
+    ${manageHref ? `<a class="menu-item" href="${esc(manageHref)}">⚙️ Kelola akun</a>` : ''}
+    <a class="menu-item" href="${esc(logoutHref)}">🚪 Keluar</a>
+  </div></details>`;
+}
 
 function page({ title, brand, flow, body, right = '', narrow = false }) {
   return `<!doctype html>
@@ -97,4 +145,4 @@ function page({ title, brand, flow, body, right = '', narrow = false }) {
 </body></html>`;
 }
 
-module.exports = { esc, avatar, alert, demoHint, fmtTime, page };
+module.exports = { esc, avatar, alert, demoHint, fmtTime, page, appLauncher, avatarMenu };

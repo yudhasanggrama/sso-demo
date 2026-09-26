@@ -28,11 +28,11 @@ function authClient(req) {
 
 module.exports = function registerOidcRoutes(app) {
   // ---- Mulai: pengguna membuka Portal → "Masih dikenali dari kunjungan sebelumnya?" ----
-  app.get('/', (req, res) => {
-    const bs = core.loadBS(req);
+  app.get('/', async (req, res) => {
+    const bs = await core.loadBS(req);
     const msg = MESSAGES[req.query.msg];
     if (!bs || !bs.accounts.length) {
-      return res.html(core.view(bs, {
+      return res.html(await core.view(bs, {
         title: 'Selamat datang', narrow: true,
         flow: 'Alur 1 · Tidak dikenali → halaman mode tamu, hanya ada tombol Masuk',
         body: `${msg ? ui.alert(msg[0], msg[1]) : ''}<div class="card" style="text-align:center">
@@ -45,19 +45,21 @@ module.exports = function registerOidcRoutes(app) {
   });
 
   // B → Halaman Utama: grid layanan dan foto profil
-  function renderHome(req, res, bs, msg) {
-    const user = core.activeUser(bs);
+  async function renderHome(req, res, bs, msg) {
+    const user = await core.activeUser(bs);
     const acct = core.activeAccount(bs);
     const visible = cfg.services.filter(s => !s.requiredRole || user.roles.includes(s.requiredRole));
+    // (grid 3x3 di header memakai core.visibleServices; grid di badan halaman ini dibuat lebih kaya, dengan deskripsi dan status)
     const hidden = cfg.services.length - visible.length;
-    const open = new Set(store.serviceSessions.filter(s => s.sid === acct.sid).map(s => s.clientId));
+    const openList = await store.serviceSessionsBySid(acct.sid);
+    const open = new Set(openList.map(s => s.clientId));
     const tiles = visible.map(s => `<a class="tile" href="${s.url}/" style="--c:${s.color}">
         <span class="tile-icon">${s.icon}</span><strong>${esc(s.name)}</strong><span class="muted small">${esc(s.description)}</span>
         <span class="tags">${s.sensitive ? '<span class="tag warn">Sensitif · minta kode lagi</span>' : ''}${open.has(s.id) ? '<span class="tag ok">Sedang terbuka</span>' : ''}${user.consents[s.id] ? '' : '<span class="tag">Perlu persetujuan</span>'}</span></a>`).join('');
     const closed = Number(req.query.closed) || 0;
     const prev = user.previousLogin;
 
-    res.html(core.view(bs, {
+    res.html(await core.view(bs, {
       title: 'Halaman Utama',
       flow: 'Alur 3 · Halaman Utama → pengguna mengklik apa? (ikon layanan / foto profil)',
       body: `${msg ? ui.alert(msg[0], msg[1] + (closed ? ` ${closed} sesi layanan milik akun sebelumnya ditutup agar akun tidak tertukar.` : '')) : ''}
@@ -91,12 +93,12 @@ module.exports = function registerOidcRoutes(app) {
   app.get('/jwks', (req, res) => res.json(core.jwks));
 
   // ---- "Layanan bertanya ke Pusat Akun: siapa pengguna ini?" ----
-  app.get('/authorize', (req, res) => {
+  app.get('/authorize', async (req, res) => {
     const q = req.query;
     const client = cfg.clients[q.client_id];
-    const bs0 = core.loadBS(req);
+    const bs = await core.loadBS(req);
     if (!client || q.redirect_uri !== client.redirectUri) {
-      return core.errorPage(res, bs0, 'Permintaan tidak valid', 'Layanan tidak terdaftar atau alamat kembali tidak cocok.');
+      return core.errorPage(res, bs, 'Permintaan tidak valid', 'Layanan tidak terdaftar atau alamat kembali tidak cocok.');
     }
     const back = params => res.redirect(`${client.redirectUri}?${new URLSearchParams({ ...params, state: q.state || '' })}`);
     const scopes = String(q.scope || '').split(' ').filter(Boolean);
@@ -105,13 +107,12 @@ module.exports = function registerOidcRoutes(app) {
     if (!scopes.includes('openid') || scopes.some(s => !client.scopes.includes(s))) return back({ error: 'invalid_scope' });
 
     // "Pusat Akun masih mengenali pengguna?" — Tidak → C ke Alur 1
-    const bs = bs0;
     const acct = core.activeAccount(bs);
     if (!acct) return res.redirect(`/login?return=${encodeURIComponent(req.url)}`);
-    const user = store.users.get(acct.userId);
+    const user = await store.getUser(acct.userId);
 
     if (client.requiredRole && !user.roles.includes(client.requiredRole)) {
-      core.audit(req, user.id, 'warn', `Akses ke ${client.name} ditolak`, 'Akun tidak memiliki hak');
+      await core.audit(req, user.id, 'warn', `Akses ke ${client.name} ditolak`, 'Akun tidak memiliki hak');
       return back({ error: 'access_denied', error_description: `Akun ${user.email} tidak memiliki hak untuk layanan ini.` });
     }
 
@@ -119,13 +120,14 @@ module.exports = function registerOidcRoutes(app) {
     if (client.sensitive && !isFreshMfa(acct)) {
       const enrolled = core.hasTwoFa(user);
       bs.pending = { purpose: 'stepup', stage: enrolled ? 'verify' : 'enroll', mandatory: true, userId: user.id, returnTo: req.url, clientName: client.name };
+      await core.persist({ bs });
       return res.redirect(enrolled ? '/2fa/verify' : '/2fa/enroll');
     }
 
     // "Pengguna pernah menyetujui data yang akan dibagikan?"
     const granted = user.consents[client.id] || [];
     if (!scopes.every(s => granted.includes(s))) {
-      return res.html(core.view(bs, {
+      return res.html(await core.view(bs, {
         title: 'Persetujuan', narrow: true,
         flow: 'Alur 3 · Belum pernah menyetujui → halaman persetujuan',
         body: `<div class="card"><div style="font-size:36px">${client.icon}</div>
@@ -144,7 +146,7 @@ module.exports = function registerOidcRoutes(app) {
 
     // "Pusat Akun memberi tiket sekali pakai, masa berlaku sangat singkat"
     const code = sec.randomToken(32);
-    store.authCodes.set(code, {
+    await store.setAuthCode(code, {
       clientId: client.id, userId: user.id, sid: acct.sid, redirectUri: client.redirectUri, scopes,
       nonce: q.nonce, codeChallenge: q.code_challenge, expiresAt: Date.now() + policy.authCodeTtlMs, used: false,
       authTime: acct.authTime, acr: isFreshMfa(acct) ? cfg.ACR_MFA : cfg.ACR_PWD, amr: acct.amr,
@@ -152,9 +154,9 @@ module.exports = function registerOidcRoutes(app) {
     back({ code });
   });
 
-  app.post('/consent', (req, res) => {
-    const bs = core.loadBS(req);
-    const user = core.activeUser(bs);
+  app.post('/consent', async (req, res) => {
+    const bs = await core.loadBS(req);
+    const user = await core.activeUser(bs);
     const ret = String(req.body.return || '');
     if (!user || !ret.startsWith('/authorize?')) return res.redirect('/');
     const params = new URL(ret, core.ISSUER).searchParams;
@@ -163,40 +165,42 @@ module.exports = function registerOidcRoutes(app) {
     if (req.body.decision === 'allow') {
       const scopes = (params.get('scope') || '').split(' ').filter(s => client.scopes.includes(s));
       user.consents[client.id] = [...new Set([...(user.consents[client.id] || []), ...scopes])];
-      core.audit(req, user.id, 'info', `Menyetujui berbagi data dengan ${client.name}`, scopes.join(', '));
+      await core.audit(req, user.id, 'info', `Menyetujui berbagi data dengan ${client.name}`, scopes.join(', '));
+      await core.persist({ user });
       return res.redirect(ret);
     }
     // Tolak → 1 (kembali ke Halaman Utama)
-    core.audit(req, user.id, 'info', `Menolak berbagi data dengan ${client.name}`);
+    await core.audit(req, user.id, 'info', `Menolak berbagi data dengan ${client.name}`);
     res.redirect('/?msg=consent_rejected');
   });
 
   // ---- "Layanan menukar tiket menjadi kartu identitas digital" (antar server) ----
-  app.post('/token', (req, res) => {
+  app.post('/token', async (req, res) => {
     const client = authClient(req);
     if (!client) return res.json({ error: 'invalid_client' }, 401);
     if (req.body.grant_type !== 'authorization_code') return res.json({ error: 'unsupported_grant_type' }, 400);
     const bad = desc => res.json({ error: 'invalid_grant', error_description: desc }, 400);
 
     const code = String(req.body.code || '');
-    const rec = store.authCodes.get(code);
+    const rec = await store.getAuthCode(code);
     if (!rec) return bad('Tiket tidak dikenal');
     if (rec.used) {
       // Tiket dipakai dua kali: tanda pencurian. Cabut semua yang pernah diterbitkan dari tiket ini.
-      core.revokeTokens(t => t.fromCode === code);
-      store.addAudit({ userId: rec.userId, level: 'critical', title: 'Tiket sekali pakai dipakai ulang', detail: `Layanan ${client.name}; kunci akses terkait dicabut` });
+      await core.revokeTokens(t => t.fromCode === code);
+      await store.addAudit({ userId: rec.userId, level: 'critical', title: 'Tiket sekali pakai dipakai ulang', detail: `Layanan ${client.name}; kunci akses terkait dicabut` });
       return bad('Tiket sudah pernah dipakai');
     }
     rec.used = true;
+    await store.updateAuthCode(code, rec);
     if (rec.expiresAt < Date.now()) return bad('Tiket sudah kedaluwarsa');
     if (rec.clientId !== client.id || rec.redirectUri !== req.body.redirect_uri) return bad('Tiket bukan untuk layanan ini');
     if (sec.sha256(req.body.code_verifier || '') !== rec.codeChallenge) return bad('Verifikasi PKCE gagal');
-    const user = store.users.get(rec.userId);
+    const user = await store.getUser(rec.userId);
     if (user?.status !== 'active') return bad('Akun tidak aktif');
 
     const now = Math.floor(Date.now() / 1000);
     const accessToken = sec.randomToken(32);
-    store.accessTokens.set(accessToken, {
+    await store.setAccessToken(accessToken, {
       clientId: client.id, userId: user.id, sid: rec.sid, scopes: rec.scopes, fromCode: code,
       issuedAt: Date.now(), expiresAt: Date.now() + policy.accessTokenTtlSec * 1000, revoked: false,
     });
@@ -210,19 +214,19 @@ module.exports = function registerOidcRoutes(app) {
   });
 
   // Layanan memeriksa apakah kunci akses masih berlaku (dipakai setiap kali halaman layanan dibuka).
-  app.post('/introspect', (req, res) => {
+  app.post('/introspect', async (req, res) => {
     const client = authClient(req);
     if (!client) return res.json({ error: 'invalid_client' }, 401);
-    const t = store.accessTokens.get(String(req.body.token || ''));
+    const t = await store.getAccessToken(String(req.body.token || ''));
     if (!t || t.revoked || t.expiresAt < Date.now() || t.clientId !== client.id) return res.json({ active: false });
     res.json({ active: true, sub: t.userId, client_id: t.clientId, scope: t.scopes.join(' '), sid: t.sid, exp: Math.floor(t.expiresAt / 1000) });
   });
 
-  app.get('/userinfo', (req, res) => {
+  app.get('/userinfo', async (req, res) => {
     const token = /^Bearer (.+)$/.exec(req.headers.authorization || '')?.[1];
-    const t = token && store.accessTokens.get(token);
+    const t = token && await store.getAccessToken(token);
     if (!t || t.revoked || t.expiresAt < Date.now()) return res.json({ error: 'invalid_token' }, 401);
-    const u = store.users.get(t.userId);
+    const u = await store.getUser(t.userId);
     const out = { sub: u.id };
     if (t.scopes.includes('profile')) Object.assign(out, { name: u.name, preferred_username: u.username });
     if (t.scopes.includes('email')) Object.assign(out, { email: u.email, email_verified: true });
@@ -231,24 +235,38 @@ module.exports = function registerOidcRoutes(app) {
   });
 
   // "Pusat Akun mencatat: layanan ini sedang dipakai"
-  app.post('/internal/service-session', (req, res) => {
+  app.post('/internal/service-session', async (req, res) => {
     const client = authClient(req);
     if (!client) return res.json({ error: 'invalid_client' }, 401);
     const { sid, sub } = req.body;
-    const bs = [...store.browserSessions.values()].find(b => b.accounts.some(a => a.sid === sid && a.userId === sub));
-    if (!bs) return res.json({ error: 'unknown_session' }, 400);
-    store.serviceSessions = store.serviceSessions.filter(s => !(s.sid === sid && s.clientId === client.id));
-    store.serviceSessions.push({ sid, clientId: client.id, userId: sub, bsId: bs.id, since: Date.now() });
-    store.addAudit({ userId: sub, level: 'info', title: `Layanan ${client.name} dibuka`, detail: 'Tercatat sebagai layanan yang sedang dipakai' });
+    const bs = await store.findBSBySid(sid);
+    if (!bs || !bs.accounts.some(a => a.sid === sid && a.userId === sub)) return res.json({ error: 'unknown_session' }, 400);
+    await store.addServiceSession({ sid, clientId: client.id, userId: sub, bsId: bs.id, since: Date.now() });
+    await store.addAudit({ userId: sub, level: 'info', title: `Layanan ${client.name} dibuka`, detail: 'Tercatat sebagai layanan yang sedang dipakai' });
     res.json({ ok: true });
   });
 
-  // "Akses ditolak dan dicatat sebagai insiden keamanan"
-  app.post('/internal/incident', (req, res) => {
+  // Alur 3a · Header Bersama: layanan meminta data untuk merender grid 3x3 + avatar yang
+  // markup-nya identik dengan Portal (posisi dan tampilan sama di setiap halaman).
+  app.post('/internal/header', async (req, res) => {
     const client = authClient(req);
     if (!client) return res.json({ error: 'invalid_client' }, 401);
-    const sub = store.users.has(req.body.sub) ? req.body.sub : null;
-    store.addAudit({ userId: sub, level: 'critical', title: `Insiden keamanan di layanan ${client.name}`, detail: String(req.body.reason || '').slice(0, 200), ip: req.body.ip, ua: req.body.ua });
+    const sid = String(req.body.sid || '');
+    const bs = await store.findBSBySid(sid);
+    const acct = bs?.accounts.find(a => a.sid === sid);
+    const user = acct && await store.getUser(acct.userId);
+    if (!bs || !user || user.status !== 'active') return res.json({ error: 'unknown_session' }, 404);
+    const accountUsers = await Promise.all(bs.accounts.map(a => store.getUser(a.userId)));
+    const accounts = accountUsers.filter(Boolean).map(u => ({ id: u.id, name: u.name, email: u.email }));
+    res.json({ user: { id: user.id, name: user.name, email: user.email }, services: core.visibleServices(user), accounts });
+  });
+
+  // "Akses ditolak dan dicatat sebagai insiden keamanan"
+  app.post('/internal/incident', async (req, res) => {
+    const client = authClient(req);
+    if (!client) return res.json({ error: 'invalid_client' }, 401);
+    const sub = await store.hasUser(req.body.sub) ? req.body.sub : null;
+    await store.addAudit({ userId: sub, level: 'critical', title: `Insiden keamanan di layanan ${client.name}`, detail: String(req.body.reason || '').slice(0, 200), ip: req.body.ip, ua: req.body.ua });
     res.json({ ok: true });
   });
 };

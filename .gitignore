@@ -1,2 +1,4 @@
 sso_flowchart.mmd
 /.claude
+node_modules/
+.env
