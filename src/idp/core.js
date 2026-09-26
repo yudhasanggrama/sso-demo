@@ -236,6 +236,28 @@ async function endServiceSessions(targets) {
   return { results, revoked };
 }
 
+// Putuskan sesi akun ini DI MANA PUN, sekarang juga — dipakai panel admin saat mengunci, menonaktifkan,
+// atau menghapus akun. Tanpa ini, mengunci akun cuma mengubah status di database: layanan yang sudah
+// terbuka tetap jalan sampai kunci aksesnya kedaluwarsa sendiri (bisa sampai 1 jam), karena /introspect
+// tidak pernah mengecek status akun — cuma mengecek kunci aksesnya sendiri.
+async function forceLogoutUser(userId) {
+  const svc = await store.serviceSessionsByUser(userId);
+  if (svc.length) await endServiceSessions(svc); // backchannel logout ke tiap layanan + cabut kunci akses
+  await revokeTokens(t => t.userId === userId); // jaga-jaga: kunci akses yang belum sempat tercatat sebagai sesi layanan
+  for (const bs of await store.allBrowserSessions()) {
+    const before = bs.accounts.length;
+    bs.accounts = bs.accounts.filter(a => a.userId !== userId);
+    if (bs.accounts.length !== before) {
+      if (bs.activeUserId === userId) bs.activeUserId = bs.accounts[0]?.userId ?? null;
+      // Supaya begitu browser ini kembali ke Portal (mis. layanan yang tadi terbuka baru saja diakhiri
+      // paksa di atas), langsung terlihat alasannya — bukan diam-diam terlihat seperti tamu biasa —
+      // hanya kalau tidak ada akun lain yang masih aktif di browser yang sama.
+      if (!bs.accounts.length) bs.pending = { purpose: 'login', stage: 'locked', userId };
+      await store.saveBS(bs);
+    }
+  }
+}
+
 async function logoutAccounts(req, accounts, label) {
   const sids = new Set(accounts.map(a => a.sid));
   // "Ambil daftar layanan yang sedang terbuka"
@@ -256,5 +278,5 @@ module.exports = {
   ISSUER, BS_COOKIE, DEV_COOKIE, KID, jwks, signToken, METHOD_LABEL, SCOPE_LABEL,
   deviceLabel, locationOf, hasTwoFa, audit, loadBS, ensureBS, deviceId, activeAccount, activeUser,
   pendingCtx, view, errorPage, completeLogin, backchannelLogout, endServiceSessions, logoutAccounts, revokeTokens, alignServiceSessions,
-  visibleServices, safeExternalReturn, persist,
+  visibleServices, safeExternalReturn, persist, forceLogoutUser,
 };

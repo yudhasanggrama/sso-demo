@@ -32,6 +32,9 @@ module.exports = function registerOidcRoutes(app) {
     const bs = await core.loadBS(req);
     const msg = MESSAGES[req.query.msg];
     if (!bs || !bs.accounts.length) {
+      // Baru saja dikunci/dinonaktifkan admin saat sedang dipakai (lihat core.forceLogoutUser) —
+      // tunjukkan alasannya, jangan diam-diam terlihat seperti tamu biasa yang belum pernah masuk.
+      if (bs?.pending?.stage === 'locked') return res.redirect('/locked');
       return res.html(await core.view(bs, {
         title: 'Selamat datang', narrow: true,
         flow: 'Alur 1 · Tidak dikenali → halaman mode tamu, hanya ada tombol Masuk',

@@ -29,8 +29,6 @@ const SCHEMA = [
     roles               JSON NOT NULL,
     failed_logins       INT NOT NULL DEFAULT 0,
     two_fa              JSON NULL,
-    two_fa_failures     INT NOT NULL DEFAULT 0,
-    two_fa_locked_until BIGINT NOT NULL DEFAULT 0,
     two_fa_deferred_at  BIGINT NOT NULL DEFAULT 0,
     trusted_devices     JSON NOT NULL,
     consents            JSON NOT NULL,
@@ -67,8 +65,22 @@ const SCHEMA = [
   ) ENGINE=InnoDB`,
 ];
 
+// Kolom lama dari versi sebelumnya — counter gagal 2FA dan waktu kunci sementaranya sekarang disimpan
+// di Redis (lihat store.js), karena sifatnya sementara/wajar kedaluwarsa sendiri (TTL), bukan data akun
+// yang tetap. Dihapus di sini kalau masih ada peninggalan dari instalasi lama.
+async function dropLegacyColumns() {
+  const legacy = ['two_fa_failures', 'two_fa_locked_until'];
+  const [rows] = await pool.query(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME IN (?)`,
+    [legacy],
+  );
+  for (const row of rows) await pool.query(`ALTER TABLE users DROP COLUMN \`${row.COLUMN_NAME}\``);
+}
+
 async function migrate() {
   for (const sql of SCHEMA) await pool.query(sql);
+  await dropLegacyColumns();
 }
 
 module.exports = { pool, migrate };

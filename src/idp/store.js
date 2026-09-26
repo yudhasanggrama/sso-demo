@@ -1,10 +1,11 @@
 'use strict';
 // Lapisan akses data Pusat Akun — pengganti Map di memori sebelumnya.
-//  · MySQL (db_sso_demo): data yang TETAP — akun pengguna (incl. 2FA, perangkat tepercaya,
+//  · MySQL (db_sso_demo): data yang TETAP — akun pengguna (incl. metode 2FA, perangkat tepercaya,
 //    consents sebagai kolom JSON), riwayat keamanan (audit_log), logout gagal, dan admin.
 //  · Redis: data SESI/SEMENTARA — penanda sesi browser (termasuk status login yang sedang
-//    berjalan), tiket sekali pakai, kunci akses, sesi tiap layanan, token pemulihan, dan
-//    bantuan demo (password/kode cadangan contoh, kotak keluar SMS/email simulasi).
+//    berjalan), tiket sekali pakai, kunci akses, sesi tiap layanan, token pemulihan, counter
+//    gagal 2FA beserta kunci sementaranya (TTL bawaan, wajar kedaluwarsa sendiri), dan bantuan
+//    demo (password/kode cadangan contoh, kotak keluar SMS/email simulasi).
 const sec = require('../lib/security');
 const cfg = require('../config');
 const db = require('../db/mysql');
@@ -23,24 +24,52 @@ function rowToUser(row) {
   return {
     id: row.id, username: row.username, email: row.email, name: row.name, passwordHash: row.password_hash,
     status: row.status, org: j(row.org), roles: j(row.roles), failedLogins: row.failed_logins,
-    twoFa: j(row.two_fa), twoFaFailures: row.two_fa_failures,
-    twoFaLockedUntil: Number(row.two_fa_locked_until), twoFaDeferredAt: Number(row.two_fa_deferred_at),
+    twoFa: j(row.two_fa), twoFaDeferredAt: Number(row.two_fa_deferred_at),
     trustedDevices: j(row.trusted_devices) || [], consents: j(row.consents) || {},
     lastLogin: j(row.last_login), previousLogin: j(row.previous_login), createdAt: Number(row.created_at),
   };
 }
 
+// Counter gagal 2FA dan kunci sementaranya (Alur 2) sengaja di Redis, BUKAN kolom MySQL — sifatnya
+// sementara dan wajar kedaluwarsa sendiri (TTL), beda dari data akun yang harus tetap ada.
+const twoFaFailKey = userId => `sso:2fa-fail:${userId}`;
+const twoFaLockKey = userId => `sso:2fa-lock:${userId}`;
+
+async function get2faFailures(userId) {
+  const v = await redis.client.get(twoFaFailKey(userId));
+  return v ? Number(v) : 0;
+}
+async function get2faLockedUntil(userId) {
+  const ttl = await redis.client.pTTL(twoFaLockKey(userId)); // ms tersisa; -2 = tidak ada kunci, -1 = tidak ada TTL
+  return ttl > 0 ? Date.now() + ttl : 0;
+}
+// Dipanggil dari saveUser() — menyamakan isi Redis dengan field di objek user (0/lewat = hapus kuncinya).
+async function syncTwoFaCounters(u) {
+  if (u.twoFaFailures) await redis.client.set(twoFaFailKey(u.id), u.twoFaFailures);
+  else await redis.client.del(twoFaFailKey(u.id));
+  const remaining = (u.twoFaLockedUntil || 0) - Date.now();
+  if (remaining > 0) await redis.client.set(twoFaLockKey(u.id), '1', { PX: remaining });
+  else await redis.client.del(twoFaLockKey(u.id));
+}
+async function hydrateTwoFaCounters(user) {
+  if (!user) return user;
+  const [failures, lockedUntil] = await Promise.all([get2faFailures(user.id), get2faLockedUntil(user.id)]);
+  user.twoFaFailures = failures;
+  user.twoFaLockedUntil = lockedUntil;
+  return user;
+}
+
 async function getUser(id) {
   if (!id) return null;
   const [rows] = await db.pool.query('SELECT * FROM users WHERE id=? LIMIT 1', [id]);
-  return rowToUser(rows[0]);
+  return hydrateTwoFaCounters(rowToUser(rows[0]));
 }
 
 async function findUser(login) {
   const l = String(login || '').trim().toLowerCase();
   if (!l) return null;
   const [rows] = await db.pool.query('SELECT * FROM users WHERE email=? OR username=? LIMIT 1', [l, l]);
-  return rowToUser(rows[0]);
+  return hydrateTwoFaCounters(rowToUser(rows[0]));
 }
 
 async function hasUser(id) {
@@ -50,45 +79,37 @@ async function hasUser(id) {
 
 async function listUsers() {
   const [rows] = await db.pool.query('SELECT * FROM users ORDER BY created_at');
-  return rows.map(rowToUser);
+  return Promise.all(rows.map(r => hydrateTwoFaCounters(rowToUser(r))));
 }
 
 async function saveUser(u) {
   await db.pool.query(
     `INSERT INTO users (id, username, email, name, password_hash, status, org, roles, failed_logins,
-       two_fa, two_fa_failures, two_fa_locked_until, two_fa_deferred_at, trusted_devices, consents,
+       two_fa, two_fa_deferred_at, trusted_devices, consents,
        last_login, previous_login, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
      ON DUPLICATE KEY UPDATE
        username=VALUES(username), email=VALUES(email), name=VALUES(name), password_hash=VALUES(password_hash),
        status=VALUES(status), org=VALUES(org), roles=VALUES(roles), failed_logins=VALUES(failed_logins),
-       two_fa=VALUES(two_fa), two_fa_failures=VALUES(two_fa_failures), two_fa_locked_until=VALUES(two_fa_locked_until),
-       two_fa_deferred_at=VALUES(two_fa_deferred_at), trusted_devices=VALUES(trusted_devices), consents=VALUES(consents),
+       two_fa=VALUES(two_fa), two_fa_deferred_at=VALUES(two_fa_deferred_at),
+       trusted_devices=VALUES(trusted_devices), consents=VALUES(consents),
        last_login=VALUES(last_login), previous_login=VALUES(previous_login)`,
     [u.id, u.username, u.email.toLowerCase(), u.name, u.passwordHash, u.status,
       JSON.stringify(u.org), JSON.stringify(u.roles), u.failedLogins || 0,
-      u.twoFa ? JSON.stringify(u.twoFa) : null, u.twoFaFailures || 0, u.twoFaLockedUntil || 0, u.twoFaDeferredAt || 0,
+      u.twoFa ? JSON.stringify(u.twoFa) : null, u.twoFaDeferredAt || 0,
       JSON.stringify(u.trustedDevices || []), JSON.stringify(u.consents || {}),
       u.lastLogin ? JSON.stringify(u.lastLogin) : null, u.previousLogin ? JSON.stringify(u.previousLogin) : null,
       u.createdAt || Date.now()],
   );
+  await syncTwoFaCounters(u);
 }
 
-// Dipakai panel admin: hapus akun dan bersihkan jejaknya di sesi/kunci akses (Redis) juga.
+// Dipakai panel admin. Memutuskan sesi/kunci akses yang sedang berjalan (agar efeknya langsung terasa,
+// bukan menunggu token lama kedaluwarsa sendiri) adalah tanggung jawab core.forceLogoutUser() — dipanggil
+// pemanggil SEBELUM ini, karena butuh memberi tahu tiap layanan lewat backchannel logout (logika di core.js).
 async function deleteUser(id) {
-  const svc = await serviceSessionsByUser(id);
-  await removeServiceSessions(svc);
-  const tokenPredicate = t => t.userId === id;
-  await revokeTokens(tokenPredicate);
-  for (const bs of await allBrowserSessions()) {
-    const before = bs.accounts.length;
-    bs.accounts = bs.accounts.filter(a => a.userId !== id);
-    if (bs.accounts.length !== before) {
-      if (bs.activeUserId === id) bs.activeUserId = bs.accounts[0]?.userId ?? null;
-      await saveBS(bs);
-    }
-  }
   await db.pool.query('DELETE FROM users WHERE id=?', [id]);
+  await redis.client.del([twoFaFailKey(id), twoFaLockKey(id)]);
 }
 
 // ============================== Riwayat keamanan (MySQL) ==============================

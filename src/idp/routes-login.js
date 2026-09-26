@@ -138,11 +138,21 @@ module.exports = function registerLoginRoutes(app) {
     res.redirect('/login/2fa'); // A → Alur 2
   });
 
-  // Berhenti di halaman akun terkunci, arahkan ke pemulihan akun
+  // Berhenti di halaman akun terkunci/dinonaktifkan.
   app.get('/locked', async (req, res) => {
     const bs = await core.loadBS(req);
     const user = await store.getUser(bs?.pending?.userId);
-    const disabled = user?.status === 'disabled';
+    if (!user) return res.redirect('/login');
+
+    // Sudah diaktifkan lagi oleh admin sejak terakhir kali halaman ini dituju (mis. tab ini dibiarkan
+    // terbuka lalu di-refresh) — jangan tampilkan pesan basi, langsung ke halaman masuk biasa,
+    // BUKAN ke pemulihan, karena akunnya sudah sah untuk dipakai lagi.
+    if (user.status === 'active') {
+      if (bs) { bs.pending = null; await core.persist({ bs }); }
+      return res.redirect('/login');
+    }
+
+    const disabled = user.status === 'disabled';
     res.html(await core.view(bs, {
       title: 'Akun terkunci', narrow: true, hideMenu: true,
       flow: 'Alur 1 · Berhenti di halaman akun terkunci',

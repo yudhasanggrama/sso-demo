@@ -122,6 +122,7 @@ module.exports = function registerAdminRoutes(app) {
     if (u && u.status === 'active') {
       u.status = 'locked';
       await store.saveUser(u);
+      await core.forceLogoutUser(u.id); // langsung terasa: tidak menunggu kunci akses lama kedaluwarsa sendiri
       await store.addAudit({ userId: u.id, level: 'critical', title: 'Akun dikunci oleh admin', detail: `Oleh ${username}` });
     }
     res.redirect('/admin?msg=locked');
@@ -151,6 +152,7 @@ module.exports = function registerAdminRoutes(app) {
     if (u && u.status === 'active') {
       u.status = 'disabled';
       await store.saveUser(u);
+      await core.forceLogoutUser(u.id); // langsung terasa: tidak menunggu kunci akses lama kedaluwarsa sendiri
       await store.addAudit({ userId: u.id, level: 'critical', title: 'Akun dinonaktifkan oleh admin', detail: `Oleh ${username}` });
     }
     res.redirect('/admin?msg=disabled');
@@ -173,6 +175,7 @@ module.exports = function registerAdminRoutes(app) {
     if (!username) return;
     const u = await store.getUser(req.params.id);
     if (u) {
+      await core.forceLogoutUser(u.id);
       await store.deleteUser(u.id);
       await store.addAudit({ userId: null, level: 'critical', title: `Akun ${u.email} dihapus oleh admin`, detail: `Oleh ${username}` });
     }

@@ -251,7 +251,7 @@ function createService(svc) {
     const forged = jwt.sign({ iss: PORTAL, sub: 'u-andi', aud: svc.id, iat: now, exp: now + 300, email: 'andi@contoh.id', acr: cfg.ACR_MFA }, attackerKey, realKid);
     try {
       await verifyJwt(forged, { issuer: PORTAL, audience: svc.id });
-      page(res, { title: 'Aneh', body: '<p>Token palsu diterima?!</p>' });
+      await page(res, { title: 'Aneh', body: '<p>Token palsu diterima?!</p>' });
     } catch (err) {
       await denied(req, res, `Token palsu terdeteksi: ${err.message}`, 'u-andi');
     }
