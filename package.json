@@ -1,0 +1,14 @@
+{
+  "name": "sso-demo",
+  "version": "1.0.0",
+  "description": "Demo Single Sign-On (Pusat Akun + beberapa layanan) sesuai flowchart Alur 1-5",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node test/smoke.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  }
+}
